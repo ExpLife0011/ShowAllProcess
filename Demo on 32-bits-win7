@@ -1,0 +1,96 @@
+#include <ntifs.h>
+#include <ntddk.h>
+
+#define LogOut(t) KdPrint((t))
+
+typedef struct _SYSTEM_PROCESS_INFORMATION
+{
+	ULONG NextEntryDelta;
+	ULONG ThreadCount;
+	ULONG Reserved[6];
+	LARGE_INTEGER CreateTime;
+	LARGE_INTEGER UserTime;
+	LARGE_INTEGER KernelTime;
+	UNICODE_STRING ProcessName;
+	KPRIORITY BasePriority;
+	ULONG ProcessId;
+	ULONG InheritedFromProcessId;
+	ULONG HandleCount;
+	ULONG Reserved2[2];
+	VM_COUNTERS VmCounters;
+	IO_COUNTERS IoCounters;
+} SYSTEM_PROCESS_INFORMATION, *PSYSTEM_PROCESS_INFORMATION;
+
+typedef NTSTATUS
+(*ZWQUERYSYSTEMINFORMATION)(
+__in ULONG SystemInformationClass,
+__out_bcount_opt(SystemInformationLength) PVOID SystemInformation,
+__in ULONG SystemInformationLength,
+__out_opt PULONG ReturnLength
+);
+
+VOID Unload(PDRIVER_OBJECT DriverObject)
+{
+	KdPrint(("Unload Success!\n"));
+}
+
+VOID QueryProcess()
+{
+	//n_代表name_
+	UNICODE_STRING n_ZwQuersySystemInformation;
+	ZWQUERYSYSTEMINFORMATION ZwQuerySystemInformation;
+	SYSTEM_PROCESS_INFORMATION *ProcessInformation;
+	SYSTEM_PROCESS_INFORMATION *temp;
+	ULONG_PTR RetLength;
+	NTSTATUS status;
+
+	RtlInitUnicodeString(&n_ZwQuersySystemInformation, L"ZwQuerySystemInformation");
+	ZwQuerySystemInformation = (ZWQUERYSYSTEMINFORMATION)MmGetSystemRoutineAddress(&n_ZwQuersySystemInformation);
+
+	if (ZwQuerySystemInformation == NULL)
+	{
+		LogOut("Get Function Fail!");
+		return;
+	}
+
+	status = ZwQuerySystemInformation(5, NULL, 0, &RetLength);
+	if (status != STATUS_INFO_LENGTH_MISMATCH)
+	{
+		LogOut("ZwQuerySystemInformation Fail!\n");
+		return;
+	}
+
+	ProcessInformation = (SYSTEM_PROCESS_INFORMATION *)ExAllocatePoolWithTag(NonPagedPool, RetLength, 'ytz');
+	status = ZwQuerySystemInformation(5, ProcessInformation, RetLength, &RetLength);
+	if (!NT_SUCCESS(status))
+	{
+		LogOut("ZwQuerySystemInformation Fail!\n");
+		return;
+	}
+
+	temp = ProcessInformation;
+	while(TRUE)
+	{
+		if (temp->ProcessId == 0)						//0的时候不会出现Idle进程的名字，但是手动输出一下就好了
+			KdPrint(("ProcessID is :0,ProcessName is :Idle\n"));
+		else
+			KdPrint(("ProcessID is :%d,ProcessName is :%wZ\n",temp->ProcessId, &temp->ProcessName));
+
+		if (temp->NextEntryDelta == 0)
+			break;
+
+		temp = (SYSTEM_PROCESS_INFORMATION *)((char*)temp + temp->NextEntryDelta);
+	}
+
+	ExFreePoolWithTag(ProcessInformation, 'ytz');
+
+	return;
+}
+
+NTSTATUS DriverEntry(PDRIVER_OBJECT DriverObject, PUNICODE_STRING RegString)
+{
+	KdPrint(("Entry Driver!\n"));
+	QueryProcess();
+	DriverObject->DriverUnload = Unload;
+	return STATUS_SUCCESS;
+}
